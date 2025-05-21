@@ -6,6 +6,15 @@ REMOTE_USER="quadra"            # Your SSH username
 REMOTE_HOST="inovatoraw"     # Your server hostname or IP
 REMOTE_DIR="/home/quadra/eli-domain-monitor" # Destination path on remote server
 
+# Parse command line arguments
+DRY_RUN="--dry-run"
+if [[ "$1" == "--real" ]]; then
+    DRY_RUN=""
+    echo "Running REAL deployment (no dry-run)"
+else
+    echo "Running DRY-RUN deployment (use --real to actually deploy)"
+fi
+
 # Create commit.txt file with current commit hash
 git rev-parse HEAD > commit.txt
 echo "Created commit.txt with commit hash: $(cat commit.txt)"
@@ -16,7 +25,7 @@ echo "Created commit.txt with commit hash: $(cat commit.txt)"
 # -avz: Archive mode, verbose output, compress during transfer
 # -e ssh: Use SSH for remote connection
 
-rsync -avz --dry-run --delete \
+rsync -avz $DRY_RUN --delete \
       --include='commit.txt' \
       --exclude='.git' \
       --exclude='.gitignore' \
@@ -28,11 +37,16 @@ rsync -avz --dry-run --delete \
       --exclude='src/__pycache__' \
       --exclude='logs/*' \
       --exclude='*.db' \
+      --exclude='domains.txt' \
       --filter=':- .gitignore' \
       -e "ssh -o RemoteCommand=none" \
       $LOCAL_DIR/ $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/
 
 # Set executable permissions for all shell scripts on the remote server
-# ssh -o RemoteCommand=none $REMOTE_USER@$REMOTE_HOST "chmod +x $REMOTE_DIR/*.sh"
-
-echo "Deployment completed successfully!"
+if [[ -z "$DRY_RUN" ]]; then
+    ssh -o RemoteCommand=none $REMOTE_USER@$REMOTE_HOST "chmod +x $REMOTE_DIR/*.sh"
+    echo "Deployment completed successfully!"
+else
+    echo "DRY-RUN: Would set executable permissions for shell scripts on remote server"
+    echo "DRY-RUN completed successfully! Use --real to actually deploy."
+fi
