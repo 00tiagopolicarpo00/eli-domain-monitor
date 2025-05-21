@@ -1,0 +1,6 @@
+**/.claude/settings.local.json
+.pytest_cache
+.venv
+__pycache__
+.DS_Store
+commit.txt
