@@ -61,15 +61,23 @@ def check_domain(domain: str, config: Config, force_check: bool = False) -> Doma
             # Extract expiration date
             exp_date = w.expiration_date
             if isinstance(exp_date, list):
-                exp_date = min(exp_date)  # Use earliest date if multiple
+                # Handle mixed timezone-aware and naive datetimes in list
+                normalized_dates = []
+                for date in exp_date:
+                    if date.tzinfo:
+                        # Convert timezone-aware to naive
+                        normalized_dates.append(date.replace(tzinfo=None))
+                    else:
+                        normalized_dates.append(date)
+                exp_date = min(normalized_dates)  # Use earliest date if multiple
             
             if exp_date:
-                info.expiration_date = exp_date
-                # Handle timezone aware datetime by using replace for comparison
-                now = datetime.datetime.now()
+                # Convert timezone-aware expiration date to naive for consistent comparison
                 if exp_date.tzinfo:
-                    # If expiration date has timezone info, make now timezone-aware too
-                    now = datetime.datetime.now(exp_date.tzinfo)
+                    exp_date = exp_date.replace(tzinfo=None)
+                
+                info.expiration_date = exp_date
+                now = datetime.datetime.now()
                 info.days_until_expiration = (exp_date - now).days
                 info.is_expired = info.days_until_expiration <= 0
             

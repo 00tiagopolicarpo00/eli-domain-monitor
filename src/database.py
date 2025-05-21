@@ -320,8 +320,15 @@ class DatabaseManager:
         # Get previous data
         previous_data = self.get_cached_domain_info(domain)
         
-        # Prepare data for storage
-        exp_date_str = expiration_date.isoformat() if expiration_date else None
+        # Prepare data for storage - ensure timezone-naive for consistent comparisons
+        if expiration_date:
+            # Convert timezone-aware datetime to naive UTC for consistent storage
+            if expiration_date.tzinfo is not None:
+                exp_date_str = expiration_date.replace(tzinfo=None).isoformat()
+            else:
+                exp_date_str = expiration_date.isoformat()
+        else:
+            exp_date_str = None
         status_json = json.dumps(status) if status else None
         
         changes = {}
