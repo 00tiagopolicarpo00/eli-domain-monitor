@@ -1,0 +1,16 @@
+# Domain Monitor - Domains List Example
+# List one domain per line
+# Lines starting with # are comments
+
+# Company domains
+example.com
+example.org
+example.net
+
+# Client domains
+client1.com
+client2.org
+
+# Partner domains
+partner1.net
+partner2.io

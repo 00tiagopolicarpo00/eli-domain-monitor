@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""
+Test suite for domain_monitor.py using pytest
+"""
+
+import sys
+import os
+import pytest
+import tempfile
+from datetime import datetime
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.domain_checker import check_domain
+from src.config import Config
+from src.domain_info import DomainInfo
+from src.database import DatabaseManager
+
+@pytest.fixture
+def test_config():
+    """Create test configuration with minimal delay."""
+    import tempfile
+    
+    # Create a temporary database file for testing
+    db_file = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    db_path = db_file.name
+    db_file.close()
+    
+    config = Config()
+    config.data['general']['query_delay'] = 0.5  # Use shorter delay for testing
+    config.data['general']['query_jitter'] = 0.2
+    config.data['general']['db_path'] = db_path
+    
+    # Reinitialize database with the temp file
+    config.db = DatabaseManager(db_path)
+    
+    return config
+
+def test_domain_info_initialization():
+    """Test DomainInfo class initialization."""
+    info = DomainInfo("example.com")
+    assert info.domain == "example.com"
+    assert info.expiration_date is None
+    assert info.days_until_expiration is None
+    assert info.status == []
+    assert info.nameservers == []
+    assert info.is_expired is False
+    assert info.has_concerning_status is False
+    assert info.nameservers_changed is False
+    assert info.added_nameservers == []
+    assert info.removed_nameservers == []
+    assert info.error is None
+
+@pytest.mark.parametrize("domain", [
+    "google.com",
+    "github.com"
+])
+def test_check_domain_returns_data(domain, test_config):
+    """Test that check_domain returns data for all expected fields."""
+    import whois
+    import dns.resolver
+    
+    # First, let's do direct queries to check the raw data
+    print(f"\nDirect WHOIS check for {domain}:")
+    w = whois.whois(domain)
+    print(f"Raw nameservers from WHOIS: {w.nameservers}")
+    
+    print(f"\nDirect DNS check for {domain}:")
+    try:
+        ns_records = dns.resolver.resolve(domain, 'NS')
+        ns_names = [ns.target.to_text().rstrip('.') for ns in ns_records]
+        print(f"Raw nameservers from DNS: {ns_names}")
+    except Exception as e:
+        print(f"DNS lookup failed: {e}")
+    
+    # Now run through our function
+    info = check_domain(domain, test_config)
+    
+    # Print diagnostic info
+    print(f"\nDomain info for {domain}:")
+    print(f"Error: {info.error}")
+    print(f"Expiration date: {info.expiration_date}")
+    print(f"Days until expiration: {info.days_until_expiration}")
+    print(f"Status: {info.status}")
+    print(f"Nameservers: {info.nameservers}")
+    
+    # Basic checks
+    assert info.domain == domain
+    assert info.error is None
+    
+    # Check expiration date
+    assert info.expiration_date is not None
+    assert isinstance(info.expiration_date, datetime)
+    
+    # Check days until expiration
+    assert info.days_until_expiration is not None
+    assert isinstance(info.days_until_expiration, int)
+    
+    # Check status
+    assert info.status is not None
+    assert len(info.status) > 0
+    assert all(isinstance(s, str) for s in info.status)
+    
+    # Check nameservers
+    assert info.nameservers is not None
+    assert len(info.nameservers) > 0
+    assert all(isinstance(ns, str) for ns in info.nameservers)
+    
+    # Check derived flags
+    assert isinstance(info.is_expired, bool)
+    assert isinstance(info.has_concerning_status, bool)
+    assert isinstance(info.nameservers_changed, bool)
+
+
+def test_database_manager():
+    """Test the DatabaseManager class for nameserver tracking."""
+    # Use a temporary file for the test database
+    with tempfile.NamedTemporaryFile(suffix='.db') as db_file:
+        db = DatabaseManager(db_file.name)
+        
+        # Test initialization
+        assert os.path.exists(db_file.name)
+        
+        # Test adding nameservers
+        domain = "testdomain.com"
+        nameservers1 = ["ns1.example.com", "ns2.example.com"]
+        
+        # First update should not report a change (first time seeing the domain)
+        changed, added, removed = db.update_nameservers(domain, nameservers1)
+        assert not changed
+        assert not added  # No additions recorded for first check
+        assert not removed
+        
+        # Verify the nameservers were stored
+        stored_ns = db.get_current_nameservers(domain)
+        assert sorted([ns.lower() for ns in stored_ns]) == sorted([ns.lower() for ns in nameservers1])
+        
+        # Second update with the same nameservers should not report a change
+        changed, added, removed = db.update_nameservers(domain, nameservers1)
+        assert not changed
+        assert not added
+        assert not removed
+        
+        # Update with different nameservers should report a change
+        nameservers2 = ["ns2.example.com", "ns3.example.com"]
+        changed, added, removed = db.update_nameservers(domain, nameservers2)
+        assert changed
+        assert added == ["ns3.example.com"]
+        assert removed == ["ns1.example.com"]
+        
+        # Verify the updated nameservers
+        stored_ns = db.get_current_nameservers(domain)
+        assert sorted([ns.lower() for ns in stored_ns]) == sorted([ns.lower() for ns in nameservers2])
+        
+        # Check history
+        history = db.get_nameserver_history(domain)
+        assert len(history) == 2  # One add and one remove event (only from the second update)
+        
+        # Test case insensitivity (nameservers in different case should not trigger a change)
+        upper_ns = [ns.upper() for ns in nameservers2]
+        changed, added, removed = db.update_nameservers(domain, upper_ns)
+        assert not changed
+        assert not added
+        assert not removed
+
+
+def test_nameserver_change_detection_in_check_domain(test_config, monkeypatch):
+    """Test nameserver change detection in the check_domain function."""
+    domain = "example.com"
+    
+    # Mock the whois and dns resolver calls to control the test
+    class MockWhois:
+        def __init__(self, domain):
+            self.domain = domain
+            self.nameservers = ["ns1.example.com", "ns2.example.com"]
+            self.expiration_date = datetime.now().replace(year=datetime.now().year + 1)
+            self.status = "clientTransferProhibited"
+    
+    def mock_whois(domain):
+        return MockWhois(domain)
+    
+    # First check with the mock nameservers  
+    monkeypatch.setattr("src.domain_checker.whois.whois", mock_whois)
+    
+    # First check should not show a change (first time seeing the domain)
+    info1 = check_domain(domain, test_config)
+    assert not info1.nameservers_changed
+    assert info1.nameservers == ["ns1.example.com", "ns2.example.com"]
+    
+    # Now change the nameservers for the next check
+    class MockWhoisChanged(MockWhois):
+        def __init__(self, domain):
+            super().__init__(domain)
+            self.nameservers = ["ns2.example.com", "ns3.example.com"]
+    
+    def mock_whois_changed(domain):
+        return MockWhoisChanged(domain)
+    
+    monkeypatch.setattr("src.domain_checker.whois.whois", mock_whois_changed)
+    
+    # Second check should detect the nameserver change
+    info2 = check_domain(domain, test_config)
+    assert info2.nameservers_changed
+    assert sorted(info2.nameservers) == sorted(["ns2.example.com", "ns3.example.com"])
+    assert sorted(info2.added_nameservers) == sorted(["ns3.example.com"])
+    assert sorted(info2.removed_nameservers) == sorted(["ns1.example.com"])

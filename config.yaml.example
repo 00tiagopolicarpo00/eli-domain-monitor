@@ -1,0 +1,39 @@
+# Domain Monitor Configuration Example
+# Rename to config.yaml to use
+
+general:
+  # Days threshold for expiration alerts
+  alert_days: 30
+  
+  # Log file location (comment out to disable file logging)
+  log_file: /var/log/domain_monitor.log
+  
+  # Database file for tracking nameserver changes
+  db_path: domain_monitor.db
+  
+  # Path to the file containing domains to check (one per line)
+  domains_file: domains.txt
+  
+  # Rate limiting settings for WHOIS queries
+  query_delay: 2.0    # Base delay between queries in seconds
+  query_jitter: 1.0   # Random jitter added to delay (0-1.0)
+  max_retries: 3      # Maximum retries for rate-limited queries
+
+email:
+  # Enable/disable email alerts
+  enabled: true
+  
+  # SMTP server configuration
+  smtp_server: smtp.example.com
+  smtp_port: 587
+  username: your_username
+  password: your_password
+  
+  # Email addresses
+  from_address: monitor@example.com
+  to_addresses:
+    - admin@example.com
+    - webmaster@example.com
+  
+  # Email subject prefix
+  subject_prefix: '[Domain Monitor]'
