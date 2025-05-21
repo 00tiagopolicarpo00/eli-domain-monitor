@@ -6,7 +6,7 @@ import logging
 import random
 import whois
 import dns.resolver
-from typing import Tuple
+from typing import Tuple, List
 from .domain_info import DomainInfo
 from .config import Config
 
@@ -22,14 +22,36 @@ CONCERNING_STATUSES = {
 }
 
 
-def check_domain(domain: str, config: Config) -> DomainInfo:
+def check_domain(domain: str, config: Config, force_check: bool = False) -> DomainInfo:
     """Check a domain for expiration date, status, and nameservers with rate limiting."""
     info = DomainInfo(domain)
     
-    # Get rate limiting parameters
+    # Get configuration parameters
     query_delay = config.data['general']['query_delay']
     query_jitter = config.data['general']['query_jitter']
     max_retries = config.data['general']['max_retries']
+    cache_hours = config.data['general'].get('cache_hours', 24)
+    
+    # Check if we should use cached data (unless force_check is True)
+    if not force_check and not config.db.should_check_domain(domain, cache_hours):
+        cached_data = config.db.get_cached_domain_info(domain)
+        if cached_data:
+            logger.info(f"Using cached data for {domain} (last checked: {cached_data['last_checked']})")
+            
+            # Populate DomainInfo from cached data
+            info.expiration_date = cached_data['expiration_date']
+            info.status = cached_data['status'] or []
+            info.days_until_expiration = cached_data['days_until_expiration']
+            info.is_expired = cached_data['is_expired']
+            info.has_concerning_status = cached_data['has_concerning_status']
+            info.error = cached_data['error']
+            
+            # Get cached nameservers to populate info object
+            info.nameservers = config.db.get_current_nameservers(domain)
+            
+            return info
+    
+    logger.info(f"Performing WHOIS lookup for {domain}")
     
     for attempt in range(max_retries):
         try:
@@ -95,6 +117,18 @@ def check_domain(domain: str, config: Config) -> DomainInfo:
                     if removed:
                         logger.warning(f"  Removed: {', '.join(removed)}")
             
+            # Store domain WHOIS data in database
+            whois_changed, whois_changes = config.db.update_domain_whois(
+                domain, info.expiration_date, info.status, info.has_concerning_status,
+                info.is_expired, info.days_until_expiration, info.error
+            )
+            
+            if whois_changed:
+                logger.info(f"Domain WHOIS changes detected for {domain}: {whois_changes}")
+            
+            # Check resolution for apex and www domains
+            _check_resolution_changes(domain, info, config)
+            
             # Success, exit the retry loop
             break
             
@@ -113,11 +147,106 @@ def check_domain(domain: str, config: Config) -> DomainInfo:
                 logger.error(f"Error checking domain {domain}: {e}")
                 break
     
+    # Store error result in database if we have an error
+    if info.error:
+        config.db.update_domain_whois(
+            domain, info.expiration_date, info.status, info.has_concerning_status,
+            info.is_expired, info.days_until_expiration, info.error
+        )
+    
     # Apply rate limiting delay before next query (with jitter to avoid thundering herd)
     jitter = random.random() * query_jitter
     time.sleep(query_delay + jitter)
     
     return info
+
+
+def _get_nameservers_only(domain: str, config: Config) -> List[str]:
+    """Get nameservers for a domain using DNS lookup only (lighter than WHOIS)."""
+    try:
+        ns_records = dns.resolver.resolve(domain, 'NS')
+        nameservers = [ns.target.to_text().rstrip('.') for ns in ns_records]
+        return nameservers
+    except Exception as e:
+        logger.warning(f"Failed to get nameservers for {domain} via DNS: {e}")
+        return []
+
+
+def _check_domain_resolution(domain: str, subdomain: str = '') -> Tuple[List[str], bool]:
+    """
+    Check where a domain/subdomain resolves to.
+    
+    Args:
+        domain: The domain name
+        subdomain: The subdomain ('' for apex, 'www' for www)
+        
+    Returns:
+        Tuple containing:
+            - List of IP addresses
+            - Boolean indicating if domain doesn't exist (NXDOMAIN)
+    """
+    query_domain = f"{subdomain}.{domain}" if subdomain else domain
+    
+    try:
+        # Try A record lookup
+        a_records = dns.resolver.resolve(query_domain, 'A')
+        ips = [str(record) for record in a_records]
+        return ips, False
+    except dns.resolver.NXDOMAIN:
+        # Domain doesn't exist
+        return [], True
+    except Exception as e:
+        # Other DNS errors (timeout, servfail, etc.)
+        logger.warning(f"Failed to resolve {query_domain}: {e}")
+        return [], False
+
+
+def _check_resolution_changes(domain: str, info: DomainInfo, config: Config) -> None:
+    """Check for resolution changes in both apex and www domains."""
+    
+    # Check apex domain resolution
+    apex_ips, apex_nxdomain = _check_domain_resolution(domain, '')
+    info.apex_ips = apex_ips
+    if apex_nxdomain:
+        info.domain_not_exist = True
+        logger.warning(f"Domain {domain} does not exist (NXDOMAIN)")
+    
+    # Track apex resolution changes
+    apex_changed, apex_added, apex_removed, apex_became_nxdomain = config.db.update_domain_resolution(
+        domain, '', apex_ips, apex_nxdomain
+    )
+    if apex_changed:
+        info.apex_changed = True
+        info.apex_added_ips = apex_added
+        info.apex_removed_ips = apex_removed
+        logger.warning(f"Apex resolution change detected for {domain}")
+        if apex_added:
+            logger.warning(f"  Added IPs: {', '.join(apex_added)}")
+        if apex_removed:
+            logger.warning(f"  Removed IPs: {', '.join(apex_removed)}")
+        if apex_became_nxdomain:
+            logger.warning(f"  Domain became NXDOMAIN")
+    
+    # Check www subdomain resolution (only if apex domain exists)
+    if not apex_nxdomain:
+        www_ips, www_nxdomain = _check_domain_resolution(domain, 'www')
+        info.www_ips = www_ips
+        
+        # Track www resolution changes
+        www_changed, www_added, www_removed, www_became_nxdomain = config.db.update_domain_resolution(
+            domain, 'www', www_ips, www_nxdomain
+        )
+        if www_changed:
+            info.www_changed = True
+            info.www_added_ips = www_added
+            info.www_removed_ips = www_removed
+            logger.warning(f"WWW resolution change detected for {domain}")
+            if www_added:
+                logger.warning(f"  Added IPs: {', '.join(www_added)}")
+            if www_removed:
+                logger.warning(f"  Removed IPs: {', '.join(www_removed)}")
+            if www_became_nxdomain:
+                logger.warning(f"  WWW subdomain became NXDOMAIN")
 
 
 def needs_alert(domain_info: DomainInfo, alert_threshold: int) -> Tuple[bool, str]:
@@ -127,6 +256,10 @@ def needs_alert(domain_info: DomainInfo, alert_threshold: int) -> Tuple[bool, st
         return True, f"Error checking domain: {domain_info.error}"
     
     reasons = []
+    
+    # Check if domain doesn't exist
+    if domain_info.domain_not_exist:
+        reasons.append("Domain does not exist (NXDOMAIN)")
     
     # Check expiration
     if domain_info.is_expired:
@@ -156,5 +289,31 @@ def needs_alert(domain_info: DomainInfo, alert_threshold: int) -> Tuple[bool, st
             reasons.append(f"Nameserver changes detected ({'; '.join(changes)})")
         else:
             reasons.append("Nameserver changes detected")
+    
+    # Check for apex resolution changes
+    if domain_info.apex_changed:
+        changes = []
+        if domain_info.apex_added_ips:
+            changes.append(f"added: {', '.join(domain_info.apex_added_ips)}")
+        if domain_info.apex_removed_ips:
+            changes.append(f"removed: {', '.join(domain_info.apex_removed_ips)}")
+        
+        if changes:
+            reasons.append(f"Apex resolution changes detected ({'; '.join(changes)})")
+        else:
+            reasons.append("Apex resolution changes detected")
+    
+    # Check for www resolution changes
+    if domain_info.www_changed:
+        changes = []
+        if domain_info.www_added_ips:
+            changes.append(f"added: {', '.join(domain_info.www_added_ips)}")
+        if domain_info.www_removed_ips:
+            changes.append(f"removed: {', '.join(domain_info.www_removed_ips)}")
+        
+        if changes:
+            reasons.append(f"WWW resolution changes detected ({'; '.join(changes)})")
+        else:
+            reasons.append("WWW resolution changes detected")
     
     return bool(reasons), ", ".join(reasons)

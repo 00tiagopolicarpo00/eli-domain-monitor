@@ -182,7 +182,7 @@ def test_nameserver_change_detection_in_check_domain(test_config, monkeypatch):
     monkeypatch.setattr("src.domain_checker.whois.whois", mock_whois)
     
     # First check should not show a change (first time seeing the domain)
-    info1 = check_domain(domain, test_config)
+    info1 = check_domain(domain, test_config, force_check=True)
     assert not info1.nameservers_changed
     assert info1.nameservers == ["ns1.example.com", "ns2.example.com"]
     
@@ -197,9 +197,125 @@ def test_nameserver_change_detection_in_check_domain(test_config, monkeypatch):
     
     monkeypatch.setattr("src.domain_checker.whois.whois", mock_whois_changed)
     
-    # Second check should detect the nameserver change
-    info2 = check_domain(domain, test_config)
+    # Second check should detect the nameserver change (force check to bypass cache)
+    info2 = check_domain(domain, test_config, force_check=True)
     assert info2.nameservers_changed
     assert sorted(info2.nameservers) == sorted(["ns2.example.com", "ns3.example.com"])
     assert sorted(info2.added_nameservers) == sorted(["ns3.example.com"])
     assert sorted(info2.removed_nameservers) == sorted(["ns1.example.com"])
+
+
+def test_domain_whois_caching(test_config, monkeypatch):
+    """Test that domain WHOIS data is cached and retrieved correctly."""
+    domain = "example.com"
+    
+    # Mock the whois call
+    class MockWhois:
+        def __init__(self, domain):
+            self.domain = domain
+            self.nameservers = ["ns1.example.com", "ns2.example.com"]
+            self.expiration_date = datetime.now().replace(year=datetime.now().year + 1)
+            self.status = "clientTransferProhibited"
+    
+    def mock_whois(domain):
+        return MockWhois(domain)
+    
+    whois_call_count = 0
+    def counting_mock_whois(domain):
+        nonlocal whois_call_count
+        whois_call_count += 1
+        return MockWhois(domain)
+    
+    monkeypatch.setattr("src.domain_checker.whois.whois", counting_mock_whois)
+    
+    # Set cache_hours to a high value so cache doesn't expire
+    test_config.data['general']['cache_hours'] = 48
+    
+    # First check should do WHOIS lookup
+    info1 = check_domain(domain, test_config, force_check=False)
+    assert whois_call_count == 1
+    assert info1.error is None
+    
+    # Second check should use cached data (no new WHOIS call)
+    info2 = check_domain(domain, test_config, force_check=False)
+    assert whois_call_count == 1  # Should still be 1
+    assert info2.error is None
+    assert info2.expiration_date == info1.expiration_date
+    assert info2.status == info1.status
+    
+    # Force check should bypass cache
+    info3 = check_domain(domain, test_config, force_check=True)
+    assert whois_call_count == 2  # Should increment
+    assert info3.error is None
+
+
+def test_domain_whois_cache_expiry(test_config, monkeypatch):
+    """Test that domain WHOIS cache expires correctly."""
+    domain = "example.com"
+    
+    class MockWhois:
+        def __init__(self, domain):
+            self.domain = domain
+            self.nameservers = ["ns1.example.com", "ns2.example.com"]
+            self.expiration_date = datetime.now().replace(year=datetime.now().year + 1)
+            self.status = "clientTransferProhibited"
+    
+    whois_call_count = 0
+    def counting_mock_whois(domain):
+        nonlocal whois_call_count
+        whois_call_count += 1
+        return MockWhois(domain)
+    
+    monkeypatch.setattr("src.domain_checker.whois.whois", counting_mock_whois)
+    
+    # Set cache_hours to 0 so cache always expires
+    test_config.data['general']['cache_hours'] = 0
+    
+    # First check
+    info1 = check_domain(domain, test_config, force_check=False)
+    assert whois_call_count == 1
+    
+    # Second check should do new WHOIS lookup due to expired cache
+    info2 = check_domain(domain, test_config, force_check=False)
+    assert whois_call_count == 2
+    
+
+def test_database_domain_whois_storage():
+    """Test storing and retrieving domain WHOIS data."""
+    with tempfile.NamedTemporaryFile(suffix='.db') as db_file:
+        db = DatabaseManager(db_file.name)
+        
+        domain = "testdomain.com"
+        exp_date = datetime.now().replace(year=datetime.now().year + 1)
+        status = ["clientTransferProhibited", "serverDeleteProhibited"]
+        
+        # Test initial storage
+        changed, changes = db.update_domain_whois(
+            domain, exp_date, status, False, False, 365, None
+        )
+        assert not changed  # First time, so no change detected
+        
+        # Test retrieval
+        cached_data = db.get_cached_domain_info(domain)
+        assert cached_data is not None
+        assert cached_data['domain'] == domain
+        assert cached_data['expiration_date'] == exp_date
+        assert cached_data['status'] == status
+        assert cached_data['has_concerning_status'] == 0  # SQLite returns 0/1 for boolean
+        assert cached_data['is_expired'] == 0
+        assert cached_data['days_until_expiration'] == 365
+        assert cached_data['error'] is None
+        
+        # Test change detection
+        new_status = ["clientTransferProhibited", "pendingDelete"]
+        changed, changes = db.update_domain_whois(
+            domain, exp_date, new_status, True, False, 365, None
+        )
+        assert changed
+        assert 'status' in changes
+        assert changes['status']['old'] == status
+        assert changes['status']['new'] == new_status
+        
+        # Test cache age check
+        assert not db.should_check_domain(domain, 24)  # Just updated
+        assert db.should_check_domain(domain, 0)  # Expired cache

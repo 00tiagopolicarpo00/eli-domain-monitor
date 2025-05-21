@@ -18,6 +18,9 @@ general:
   query_delay: 2.0    # Base delay between queries in seconds
   query_jitter: 1.0   # Random jitter added to delay (0-1.0)
   max_retries: 3      # Maximum retries for rate-limited queries
+  
+  # Cache settings for domain WHOIS data
+  cache_hours: 24     # Hours to cache domain WHOIS data before re-checking
 
 email:
   # Enable/disable email alerts

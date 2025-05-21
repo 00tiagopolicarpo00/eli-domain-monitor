@@ -77,6 +77,7 @@ class Config:
     def get_domains(self, domains_file: str = None) -> List[str]:
         """Get domains from domains file."""
         domains = []
+        seen_domains = set()
         
         # Use specified domains file or one from config
         domains_file = domains_file or self.data['general'].get('domains_file')
@@ -89,8 +90,14 @@ class Config:
         if os.path.exists(domains_file):
             try:
                 with open(domains_file, 'r') as f:
-                    file_domains = [line.strip() for line in f if line.strip() and not line.startswith('#')]
-                    domains.extend(file_domains)
+                    for line_num, line in enumerate(f, 1):
+                        domain = line.strip().lower()  # Normalize to lowercase
+                        if domain and not domain.startswith('#'):
+                            if domain in seen_domains:
+                                logger.info(f"Skipping duplicate domain '{domain}' on line {line_num} in {domains_file}")
+                            else:
+                                seen_domains.add(domain)
+                                domains.append(domain)
             except Exception as e:
                 logger.error(f"Failed to read domains file {domains_file}: {e}")
         else:

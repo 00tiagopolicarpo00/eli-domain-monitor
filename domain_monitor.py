@@ -44,7 +44,8 @@ def cli():
 @click.option('--send-email/--no-email', default=None, help='Override config email setting')
 @click.option('--delay', type=float, help='Delay between WHOIS queries (seconds)')
 @click.option('--db-path', help='Override database path')
-def check_domains(domain, file, config, alert_days, quiet, send_email, delay, db_path):
+@click.option('--no-cache', is_flag=True, help='Force WHOIS lookup even if cached data is available')
+def check_domains(domain, file, config, alert_days, quiet, send_email, delay, db_path, no_cache):
     """Check domains for expiration dates and status."""
     # Load configuration
     cfg = Config(config)
@@ -101,7 +102,7 @@ def check_domains(domain, file, config, alert_days, quiet, send_email, delay, db
     alert_threshold = cfg.get_alert_days()
     
     for domain in domains_to_check:
-        domain_info = check_domain(domain, cfg)
+        domain_info = check_domain(domain, cfg, force_check=no_cache)
         results.append(domain_info)
         
         # Check if domain needs alert
