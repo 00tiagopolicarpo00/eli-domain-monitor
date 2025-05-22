@@ -1,12 +1,8 @@
 """Domain information data structures and utilities."""
 
-import datetime
-from typing import List, Any
-
-
 class DomainInfo:
     """Class to store domain information and status."""
-    
+
     def __init__(self, domain: str):
         self.domain = domain
         self.expiration_date = None
@@ -19,7 +15,7 @@ class DomainInfo:
         self.added_nameservers = []
         self.removed_nameservers = []
         self.error = None
-        
+
         # Resolution tracking
         self.apex_ips = []
         self.www_ips = []
@@ -30,25 +26,25 @@ class DomainInfo:
         self.www_added_ips = []
         self.www_removed_ips = []
         self.domain_not_exist = False  # True if domain doesn't exist (NXDOMAIN)
-    
+
     def __str__(self) -> str:
         if self.error:
             return f"{self.domain}: ERROR - {self.error}"
-        
+
         # Check for domain not existing
         if self.domain_not_exist:
             return f"{self.domain}: DOMAIN DOES NOT EXIST (NXDOMAIN)"
-        
+
         # Handle case where expiration_date might be None
         if self.expiration_date and self.days_until_expiration is not None:
             expiry_str = (f"expires in {self.days_until_expiration} days "
                           f"({self.expiration_date.strftime('%Y-%m-%d')})")
         else:
             expiry_str = "expiration: unknown"
-        
+
         status_str = f"status: {', '.join(self.status)}"
         ns_str = f"nameservers: {', '.join(self.nameservers)}"
-        
+
         # Resolution info
         resolution_parts = []
         if self.apex_ips:
@@ -56,10 +52,10 @@ class DomainInfo:
         if self.www_ips:
             resolution_parts.append(f"www: {', '.join(self.www_ips)}")
         resolution_str = f"resolves: {'; '.join(resolution_parts)}" if resolution_parts else "resolves: none"
-        
+
         # Change notifications
         change_parts = []
-        
+
         # Nameserver changes
         if self.nameservers_changed:
             added_str = f"NS ADDED: {', '.join(self.added_nameservers)}" if self.added_nameservers else ""
@@ -69,7 +65,7 @@ class DomainInfo:
                 change_parts.append('; '.join(ns_change_parts))
             else:
                 change_parts.append("NS CHANGED")
-        
+
         # Apex resolution changes
         if self.apex_changed:
             added_str = f"APEX ADDED: {', '.join(self.apex_added_ips)}" if self.apex_added_ips else ""
@@ -79,7 +75,7 @@ class DomainInfo:
                 change_parts.append('; '.join(apex_change_parts))
             else:
                 change_parts.append("APEX CHANGED")
-        
+
         # WWW resolution changes
         if self.www_changed:
             added_str = f"WWW ADDED: {', '.join(self.www_added_ips)}" if self.www_added_ips else ""
@@ -89,7 +85,7 @@ class DomainInfo:
                 change_parts.append('; '.join(www_change_parts))
             else:
                 change_parts.append("WWW CHANGED")
-        
+
         change_str = f" [{'; '.join(change_parts)}]" if change_parts else ""
-        
+
         return f"{self.domain}: {expiry_str}, {status_str}, {ns_str}, {resolution_str}{change_str}"

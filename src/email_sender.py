@@ -98,7 +98,7 @@ def send_alert_email(config: Config, domains_to_alert: List[Tuple[DomainInfo, st
         return False
 
 
-def send_test_email(config: Config, recipient: str = None) -> bool:
+def send_test_email(config: Config, recipient: str) -> bool:
     """Send a test email to verify SMTP configuration."""
     if not config.is_email_enabled():
         logger.error("Email is not properly configured. Check your config file.")
