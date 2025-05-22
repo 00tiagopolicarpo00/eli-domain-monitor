@@ -17,6 +17,7 @@ fi
 
 # Create commit.txt file with current commit hash
 git rev-parse HEAD > commit.txt
+echo `date` >> commit.txt
 echo "Created commit.txt with commit hash: $(cat commit.txt)"
 
 # Deploy using rsync
@@ -37,7 +38,7 @@ rsync -avz $DRY_RUN --delete \
       --exclude='src/__pycache__' \
       --exclude='logs/*' \
       --exclude='*.db' \
-      --exclude='domains.txt' \
+      --include='domains.txt' \
       --filter=':- .gitignore' \
       -e "ssh -o RemoteCommand=none" \
       $LOCAL_DIR/ $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/
