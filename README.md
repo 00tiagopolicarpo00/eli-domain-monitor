@@ -17,10 +17,39 @@ A CLI tool to monitor domains for expiration dates, status changes, and nameserv
 
 ## Installation
 
+### Using Docker
+
+The easiest way to run Domain Monitor is using Docker:
+
+```bash
+# Pull the latest image
+docker pull ghcr.io/elidickinson/eli-domain-monitor:latest
+
+# Create a config file from the example
+docker run --rm ghcr.io/elidickinson/eli-domain-monitor:latest \
+    cat config.yaml.example > config.yaml
+
+# Edit config.yaml with your settings (SMTP, alert thresholds, etc.)
+nano config.yaml
+
+# Create a domains.txt file with one domain per line (just the domain, not full URLs)
+echo "example.com" > domains.txt
+echo "another-domain.org" >> domains.txt
+
+# Run the domain check
+docker run -v $(pwd)/config.yaml:/app/config.yaml \
+           -v $(pwd)/domains.txt:/app/domains.txt \
+           -v $(pwd)/domain_monitor.db:/app/domain_monitor.db \
+           ghcr.io/elidickinson/eli-domain-monitor:latest \
+           python domain_monitor.py check
+```
+
+### Manual Installation
+
 1. Clone this repository:
 ```
-git clone https://github.com/yourusername/domain-monitor.git
-cd domain-monitor
+git clone https://github.com/elidickinson/eli-domain-monitor.git
+cd eli-domain-monitor
 ```
 
 2. Install required packages:
@@ -133,13 +162,43 @@ Options:
   --help                 Show this message and exit
 ```
 
+## Domains File Format
+
+The `domains.txt` file should contain one domain name per line. Only include the domain name itself, not full URLs:
+
+```
+# Correct format:
+example.com
+google.com
+github.com
+my-domain.org
+
+# Incorrect format (don't use these):
+# https://example.com
+# www.example.com
+# example.com/page
+```
+
+Lines starting with `#` are treated as comments and ignored.
+
 ## Cron Job Integration
+
+### With Manual Installation
 
 Add the script to your crontab to run automatically:
 
 ```
 # Run domain check daily at 2 AM
 0 2 * * * cd /path/to/domain-monitor && python domain_monitor.py check --quiet >> /var/log/domain-monitor.log 2>&1
+```
+
+### With Docker
+
+For Docker deployments, create a cron job that runs the container:
+
+```
+# Run domain check daily at 2 AM using Docker
+0 2 * * * docker run -v /path/to/config.yaml:/app/config.yaml -v /path/to/domains.txt:/app/domains.txt -v /path/to/domain_monitor.db:/app/domain_monitor.db ghcr.io/elidickinson/eli-domain-monitor:latest python domain_monitor.py check --quiet >> /var/log/domain-monitor.log 2>&1
 ```
 
 ## Alert Conditions

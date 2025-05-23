@@ -1,0 +1,48 @@
+# Git
+.git
+.gitignore
+
+# GitHub
+.github/
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific
+*.db
+logs/
+data/
+domains.txt
+domains-short.txt
+config.yaml
+*.log
+
+# Documentation
+README.md
+CLAUDE.md
+
+# Scripts
+deploy.sh
+run.sh
+
+# Tests
+test/
